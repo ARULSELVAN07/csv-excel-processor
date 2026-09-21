@@ -20,6 +20,7 @@ The source is **intentionally non-compliant**. It is designed to fail a typical 
 
 ```
 csv-excel-processor/
+├── .github/workflows/quality-gate.yml
 ├── pom.xml
 ├── sonar-project.properties
 ├── src/main/java/com/training/codingstandards/
@@ -78,6 +79,14 @@ mvn -q verify sonar:sonar -Dsonar.host.url=http://localhost:9000 -Dsonar.token=<
 ```
 
 Expect the quality gate to **fail** on this baseline (bugs, vulnerabilities, security hotspots, code smells, coverage, duplications, cognitive complexity).
+
+## GitHub Actions quality gate
+
+[`.github/workflows/quality-gate.yml`](.github/workflows/quality-gate.yml) starts **SonarQube Community LTS in the workflow** (service container on `localhost:9000`), runs `mvn verify sonar:sonar`, and waits for the quality gate.
+
+The baseline is expected to **fail the job** (`sonar.qualitygate.wait=true`). After participants fix the findings, the same workflow should pass.
+
+Requires no SonarCloud account or repository secrets. Triggered on `push` to `main`, pull requests, and manual `workflow_dispatch`.
 
 ## Workshop flow (suggested)
 
