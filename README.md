@@ -86,6 +86,14 @@ Expect the quality gate to **fail** on this baseline (bugs, vulnerabilities, sec
 
 The baseline is expected to **fail the job** (`sonar.qualitygate.wait=true`). After participants fix the findings, the same workflow should pass.
 
+The Maven log link `http://localhost:9000/dashboard?id=csv-excel-processor` is **only on the GitHub Actions runner**. You cannot open it from your laptop.
+
+Download the report from the workflow run instead:
+
+1. GitHub → **Actions** → **Quality Gate** → the failed run
+2. **Artifacts** → `sonar-quality-gate-report`
+3. Open `quality-gate-report.md` (summary) plus `quality-gate.json` / `issues.json`
+
 Requires no SonarCloud account or repository secrets. Triggered on `push` to `main`, pull requests, and manual `workflow_dispatch`.
 
 ## Workshop flow (suggested)
@@ -94,5 +102,3 @@ Requires no SonarCloud account or repository secrets. Triggered on `push` to `ma
 2. Run Sonar and show a failed quality gate
 3. Ask participants to fix findings without changing the CSV → Excel behaviour
 4. Re-run tests, regenerate Excel, re-scan until the gate passes
-
-Keep [FINDINGS.md](FINDINGS.md) hidden from participants until the recap. It is the facilitator answer key.
