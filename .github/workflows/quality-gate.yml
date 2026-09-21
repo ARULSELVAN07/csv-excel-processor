@@ -50,46 +50,85 @@ jobs:
           echo "SonarQube did not become ready in time"
           exit 1
 
-      - name: Bootstrap SonarQube token and failing quality gate
-        id: sonar
+      - name: Bootstrap SonarQube auth and failing quality gate
         run: |
           set -euo pipefail
 
-          curl -sf -u admin:admin -X POST \
-            "${SONAR_HOST_URL}/api/users/change_password?login=admin&previousPassword=admin&password=${SONAR_ADMIN_PASSWORD}"
+          auth_ok() {
+            curl -sf -u "$1" "${SONAR_HOST_URL}/api/authentication/validate" \
+              | jq -e '.valid == true' >/dev/null
+          }
 
-          TOKEN=$(curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
-            "${SONAR_HOST_URL}/api/user_tokens/generate?name=github-actions" | jq -r '.token')
-          if [ -z "${TOKEN}" ] || [ "${TOKEN}" = "null" ]; then
-            echo "Failed to generate a SonarQube token"
+          # First login on Community images requires changing admin/admin.
+          curl -sS -o /tmp/sonar-change-password.json -w "%{http_code}" -u admin:admin -X POST \
+            "${SONAR_HOST_URL}/api/users/change_password" \
+            --data-urlencode "login=admin" \
+            --data-urlencode "previousPassword=admin" \
+            --data-urlencode "password=${SONAR_ADMIN_PASSWORD}" \
+            >/tmp/sonar-change-password.status || true
+          echo "change_password http=$(cat /tmp/sonar-change-password.status)"
+
+          if auth_ok "admin:${SONAR_ADMIN_PASSWORD}"; then
+            SONAR_PASSWORD="${SONAR_ADMIN_PASSWORD}"
+          elif auth_ok "admin:admin"; then
+            SONAR_PASSWORD="admin"
+          else
+            echo "Could not authenticate to SonarQube as admin"
             exit 1
           fi
-          echo "::add-mask::${TOKEN}"
-          echo "token=${TOKEN}" >> "${GITHUB_OUTPUT}"
+          SONAR_AUTH="admin:${SONAR_PASSWORD}"
 
-          curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
-            "${SONAR_HOST_URL}/api/qualitygates/create?name=workshop-fail"
+          TOKEN_JSON=$(curl -sf -u "${SONAR_AUTH}" -X POST \
+            "${SONAR_HOST_URL}/api/user_tokens/generate" \
+            --data-urlencode "name=github-actions-${GITHUB_RUN_ID}")
+          SONAR_LOGIN=$(echo "${TOKEN_JSON}" | jq -r '.token // empty')
+          if [ -z "${SONAR_LOGIN}" ]; then
+            echo "Token generation failed; using admin login/password"
+            SONAR_LOGIN="admin"
+            echo "SONAR_PASSWORD=${SONAR_PASSWORD}" >> "${GITHUB_ENV}"
+          else
+            echo "::add-mask::${SONAR_LOGIN}"
+            SONAR_PASSWORD=""
+            echo "SONAR_PASSWORD=" >> "${GITHUB_ENV}"
+          fi
 
-          # Overall-code conditions so the first analysis of this intentional baseline fails.
+          echo "SONAR_LOGIN=${SONAR_LOGIN}" >> "${GITHUB_ENV}"
+
+          curl -sf -u "${SONAR_AUTH}" -X POST \
+            "${SONAR_HOST_URL}/api/qualitygates/create" \
+            --data-urlencode "name=workshop-fail" || true
+
           create_condition() {
-            curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
-              "${SONAR_HOST_URL}/api/qualitygates/create_condition?gateName=workshop-fail&metric=${1}&op=${2}&error=${3}"
+            curl -sf -u "${SONAR_AUTH}" -X POST \
+              "${SONAR_HOST_URL}/api/qualitygates/create_condition" \
+              --data-urlencode "gateName=workshop-fail" \
+              --data-urlencode "metric=${1}" \
+              --data-urlencode "op=${2}" \
+              --data-urlencode "error=${3}" || true
           }
           create_condition bugs GT 0
           create_condition vulnerabilities GT 0
           create_condition code_smells GT 0
           create_condition coverage LT 80
 
-          curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
-            "${SONAR_HOST_URL}/api/qualitygates/set_as_default?name=workshop-fail"
+          curl -sf -u "${SONAR_AUTH}" -X POST \
+            "${SONAR_HOST_URL}/api/qualitygates/set_as_default" \
+            --data-urlencode "name=workshop-fail" || true
 
       - name: Run tests, coverage, and Sonar analysis
         run: |
           chmod +x mvnw
-          ./mvnw -B verify sonar:sonar \
-            -Dsonar.host.url="${SONAR_HOST_URL}" \
-            -Dsonar.token="${{ steps.sonar.outputs.token }}" \
-            -Dsonar.projectKey=csv-excel-processor \
-            -Dsonar.projectName="CSV to Excel Processor (Coding Standards Demo)" \
-            -Dsonar.qualitygate.wait=true \
+          # sonar-maven-plugin 4.0.x reads credentials from sonar.login
+          # (a user token, or admin + sonar.password). sonar.token is ignored.
+          MVN_SONAR_ARGS=(
+            -Dsonar.host.url="${SONAR_HOST_URL}"
+            -Dsonar.login="${SONAR_LOGIN}"
+            -Dsonar.projectKey=csv-excel-processor
+            -Dsonar.projectName="CSV to Excel Processor (Coding Standards Demo)"
+            -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=300
+          )
+          if [ -n "${SONAR_PASSWORD:-}" ]; then
+            MVN_SONAR_ARGS+=(-Dsonar.password="${SONAR_PASSWORD}")
+          fi
+          ./mvnw -B verify sonar:sonar "${MVN_SONAR_ARGS[@]}"
